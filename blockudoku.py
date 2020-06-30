@@ -44,7 +44,7 @@ class Block:
                           [(1, 2), (2, 0), (2, 1), (2, 2)],
                           [(2, 0), (2, 1), (2, 2), (3, 2)],
                           [(2, 0), (2, 1), (2, 2), (2, 3)]]
-        self.b_dict[5] = [[(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)],
+        self.b_dict[5] = [[(0, 2), (1, 2), (2, 2), (3, 2), (4, 2)],
                           [(1, 2), (1, 3), (2, 2), (3, 2), (3, 3)],
                           [(2, 2), (2, 3), (2, 4), (3, 2), (4, 2)],
                           [(1, 2), (2, 2), (2, 3), (2, 4), (3, 2)],
@@ -58,9 +58,10 @@ class Block:
                           [(0, 2), (1, 2), (2, 0), (2, 1), (2, 2)],
                           [(1, 2), (2, 0), (2, 1), (2, 2), (3, 2)],
                           [(2, 0), (2, 1), (2, 2), (3, 2), (4, 2)],
-                          [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4)]]
+                          [(2, 0), (2, 1), (2, 2), (2, 3), (2, 4)]]
 
         self.lens = [1, 4, 8, 19, 15]
+        self.indices = None
         self.block_array = np.zeros((5, 5), dtype=np.int)
         self.is_used = False
 
@@ -72,11 +73,12 @@ class Block:
     '''
     def sample(self):
         self.is_used = False
-        num_b = np.random.randint(1, 6)
+        prob = self.lens / np.sum(self.lens)
+        num_b = np.random.choice(5, p=prob) + 1
         samples = self.b_dict[num_b]
         k = np.random.randint(0, self.lens[num_b-1])
-        indices = samples[k]
-        for idx in indices:
+        self.indices = samples[k]
+        for idx in self.indices:
             self.block_array[idx] += 1
 
     '''
@@ -86,6 +88,7 @@ class Block:
     def used(self):
         self.block_array = np.zeros((5, 5), dtype=np.int)
         self.is_used = True
+        self.indices = None
 
 
 '''
@@ -104,12 +107,14 @@ class Blockudoku:
         self.obs = None
         self.block_remain = 0
         self.done = False
+        self.completed_before = False
 
     '''
     환경 초기화
     '''
     def reset(self):
         self.done = False
+        self.completed_before = False
         obs = dict()
 
         # board
@@ -139,6 +144,11 @@ class Blockudoku:
             block_arrays.append(block.block_array)
         self.block_remain = 3
         return block_arrays
+
+    def render(self):
+        print('board\n', self.obs['board'][2:11, 2:11], '\n')
+        for k in range(3):
+            print('block', k, '\n', self.obs['blocks'][k], '\n')
 
     '''
     transition
@@ -173,12 +183,14 @@ class Blockudoku:
             return self.obs, 0, self.done
         
         # 블록을 두는데 성공
-        reward = np.sum(block.block_array)
         self.obs['board'][i-2:i+3, j-2:j+3] += block.block_array
 
         #############################################################
         ########## 블록을 지웠는 지 여부, 보너스 reward 코드 시작 ##########
-        reward = None
+        reward, is_completed = self.complete_test(block, i, j)
+        if self.completed_before:
+            reward += 9
+        self.completed_before = is_completed
         ########################### 코드 끝 ##########################
         #############################################################
 
@@ -248,18 +260,69 @@ class Blockudoku:
 
         return done
 
+    @staticmethod
+    def get_indices(indices, i, j):
+        # 블록이 채워지는 곳의 인덱스
+        rst = []
+        for idx in indices:
+            row = idx[0] + i - 2
+            col = idx[1] + j - 2
+            rst.append((row, col))
+        return rst
+
+    @staticmethod
+    def get_grid(idx):
+        # 해당 인덱스에 해당하는 subgrid의 대표 인덱스
+        row, col = idx
+        g_r = (row - 2) // 3
+        g_r = 3*g_r + 2
+        g_c = (col - 2) // 3
+        g_c = 3*g_c + 2
+        return g_r, g_c
+
+    def complete_test(self, block, i, j):
+        reward = 0
+        is_completed = False
+        board = self.obs['board']
+        indices = self.get_indices(block.indices, i, j)
+        for idx in indices:
+            bonus = 0
+            row, col = idx
+            g_r, g_c = self.get_grid(idx)
+            if np.sum(self.obs['board'][row, 2:11]) == 9:
+                board[row, 2:11] = 0
+                bonus += 18
+            if np.sum(self.obs['board'][2:11, col]) == 9:
+                board[2:11, col] = 0
+                bonus += 18
+            if np.sum(self.obs['board'][g_r:g_r+3, g_c:g_c+3]) == 9:
+                board[g_r:g_r+3, g_c:g_c+3] = 0
+                bonus += 18
+            if bonus == 0 and board[row, col] == 1:
+                reward += 1
+            else:
+                reward += bonus
+                is_completed = True
+            self.obs['board'] = board
+
+        return reward, is_completed
+
 
 # test
 if __name__ == '__main__':
     env = Blockudoku()
     obs = env.reset()
-    print('board\n', obs['board'], '\n')
-    for k in range(3):
-        print('block', k, '\n', obs['blocks'][k], '\n')
 
-    # action test
-    next_obs, _, _ = env.step((0, 2, 2))
-    print('board\n', next_obs['board'], '\n')
-    for k in range(3):
-        print('block', k, '\n', next_obs['blocks'][k], '\n')
+    while True:
+        env.render()
+        k = int(input('Select the block: '))
+        i = int(input('row number: ')) + 1
+        j = int(input('col number: ')) + 1
+        act = (k, i, j)
+        next_obs, reward, done = env.step(act)
+        print('reward: ', reward)
+        print('\n\n')
+        if done:
+            break
 
+#%%
